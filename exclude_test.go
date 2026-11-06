@@ -198,11 +198,16 @@ func TestExcludeClonesAddsOnlyMissingExclusions(t *testing.T) {
 }
 
 func TestExcludeClonesContinuesAfterFailure(t *testing.T) {
-	fake := &fakeTmutil{failing: map[string]bool{"/r/bad": true}}
+	fake := &fakeTmutil{
+		failing:       map[string]bool{"/r/bad": true},
+		statusFailing: map[string]bool{"/r/unknown": true},
+	}
 
-	err := excludeClones([]string{"/r/bad", "/r/good"}, fake.run, discardLog)
-	if err == nil || !strings.Contains(err.Error(), "tmutil addexclusion /r/bad") {
-		t.Errorf("error = %v, want addexclusion failure for /r/bad", err)
+	err := excludeClones([]string{"/r/bad", "/r/unknown", "/r/good"}, fake.run, discardLog)
+	for _, want := range []string{"tmutil addexclusion /r/bad", "tmutil isexcluded /r/unknown"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %v, want it to mention %q", err, want)
+		}
 	}
 	if want := []string{"/r/good"}; !slices.Equal(fake.added, want) {
 		t.Errorf("addexclusion calls = %v, want %v", fake.added, want)

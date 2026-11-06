@@ -2,6 +2,7 @@ version: '3'
 
 vars:
   LABEL: com.erikfrerejean.tmutil-wildcard
+  COVERAGE_MIN: 90
   BIN:
     sh: echo "$(go env GOPATH)/bin/tmutil-wildcard"
   PLIST:
@@ -9,10 +10,11 @@ vars:
 
 tasks:
   test:
-    desc: Run vet and the test suite
+    desc: Run vet and the tests; fails when statement coverage drops below COVERAGE_MIN
     cmds:
       - go vet ./...
-      - go test ./...
+      - go test -coverprofile=cover.out ./...
+      - go tool cover -func=cover.out | awk -v min={{.COVERAGE_MIN}} '{ print } /^total:/ { sub("%", "", $3); if ($3 + 0 < min) { printf "coverage %s%% is below the %s%% floor\n", $3, min; exit 1 } }'
 
   install:
     desc: Build the binary and (re)load the hourly launch agent

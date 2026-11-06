@@ -41,9 +41,13 @@ only newly excluded paths and failures are logged.
 task list       # clone folders under ~/WeDevelop the agent targets
 task excluded   # status per folder: excluded, pending or stale
 task run        # one foreground reconcile run against ~/WeDevelop
-task test       # go vet + go test
+task test       # go vet + go test with a coverage floor (COVERAGE_MIN)
 task uninstall  # unload the agent and remove the binary
 ```
+
+`task test` prints per-function coverage and fails below the floor set in
+`Taskfile.yml`. CI runs the same task and adds the table to the job summary.
+For a line-by-line view after a run: `go tool cover -html=cover.out`.
 
 `list` only walks the filesystem and is instant. `excluded` asks `tmutil`
 about every clone, which takes about a second per folder, and prints one line
