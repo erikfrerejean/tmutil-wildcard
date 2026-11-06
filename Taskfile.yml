@@ -1,0 +1,35 @@
+version: '3'
+
+vars:
+  LABEL: com.erikfrerejean.tmutil-wildcard
+  BIN:
+    sh: echo "$(go env GOPATH)/bin/tmutil-wildcard"
+  PLIST:
+    sh: echo "$HOME/Library/LaunchAgents/{{.LABEL}}.plist"
+
+tasks:
+  test:
+    desc: Run vet and the test suite
+    cmds:
+      - go vet ./...
+      - go test ./...
+
+  install:
+    desc: Build the binary and (re)load the hourly launch agent
+    cmds:
+      - go install .
+      - sed -e 's|__BIN__|{{.BIN}}|g' -e "s|__HOME__|$HOME|g" launchd/{{.LABEL}}.plist > "{{.PLIST}}"
+      - plutil -lint "{{.PLIST}}"
+      - launchctl bootout "gui/$(id -u)" "{{.PLIST}}" 2>/dev/null || true
+      - launchctl bootstrap "gui/$(id -u)" "{{.PLIST}}"
+
+  uninstall:
+    desc: Unload the launch agent and remove the binary
+    cmds:
+      - launchctl bootout "gui/$(id -u)" "{{.PLIST}}" 2>/dev/null || true
+      - rm -f "{{.PLIST}}" "{{.BIN}}"
+
+  run:
+    desc: Run once against ~/WeDevelop in the foreground
+    cmds:
+      - go run . "$HOME/WeDevelop"
