@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - run: test -z "$(gofmt -l .)"
+      - run: task test
+      - name: Coverage summary
+        if: ${{ !cancelled() && hashFiles('cover.out') != '' }}
+        run: |
+          { echo '```'; go tool cover -func=cover.out; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
