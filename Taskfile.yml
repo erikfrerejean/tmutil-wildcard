@@ -30,6 +30,16 @@ tasks:
       - rm -f "{{.PLIST}}" "{{.BIN}}"
 
   run:
-    desc: Run once against ~/WeDevelop in the foreground
+    desc: Exclude the clones under ~/WeDevelop once, in the foreground
     cmds:
-      - go run . "$HOME/WeDevelop"
+      - go run . exclude "$HOME/WeDevelop"
+
+  list:
+    desc: Show the clone folders under ~/WeDevelop the agent targets
+    cmds:
+      - go run . list "$HOME/WeDevelop"
+
+  excluded:
+    desc: Show which clone folders under ~/WeDevelop Time Machine excludes now
+    cmds:
+      - go run . excluded "$HOME/WeDevelop"

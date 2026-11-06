@@ -63,6 +63,24 @@ func excludeClones(clones []string, run runner, logf logger) error {
 	return errors.Join(failures...)
 }
 
+// excludedClones returns the clones Time Machine currently excludes. A failed
+// status check is reported but does not hide the other results.
+func excludedClones(clones []string, run runner) ([]string, error) {
+	var excluded []string
+	var failures []error
+	for _, clone := range clones {
+		ok, err := isExcluded(clone, run)
+		if err != nil {
+			failures = append(failures, err)
+			continue
+		}
+		if ok {
+			excluded = append(excluded, clone)
+		}
+	}
+	return excluded, errors.Join(failures...)
+}
+
 // isExcluded parses `tmutil isexcluded`, which exits 0 for every outcome and
 // reports the state as a bracketed prefix: [Excluded], [Included] or [UNKNOWN].
 func isExcluded(path string, run runner) (bool, error) {

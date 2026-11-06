@@ -7,6 +7,7 @@
 	<key>ProgramArguments</key>
 	<array>
 		<string>__BIN__</string>
+		<string>exclude</string>
 		<string>__HOME__/WeDevelop</string>
 	</array>
 	<key>RunAtLoad</key>

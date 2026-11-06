@@ -33,16 +33,23 @@ hour against `~/WeDevelop`. Output goes to `~/Library/Logs/tmutil-wildcard.log`;
 only newly excluded paths and failures are logged.
 
 ```sh
-task run        # one foreground run against ~/WeDevelop
+task list       # clone folders under ~/WeDevelop the agent targets
+task excluded   # which of those Time Machine excludes right now
+task run        # one foreground exclusion run against ~/WeDevelop
 task test       # go vet + go test
 task uninstall  # unload the agent and remove the binary
 ```
+
+`list` only walks the filesystem and is instant. `excluded` asks `tmutil`
+about every clone, which takes about a second per folder.
 
 To watch a different folder, change the root argument in the plist template
 and re-run `task install`, or run the binary directly:
 
 ```sh
-tmutil-wildcard ~/Code ~/Other
+tmutil-wildcard exclude ~/Code ~/Other
+tmutil-wildcard list ~/Code
+tmutil-wildcard excluded ~/Code
 ```
 
 ## Undoing an exclusion

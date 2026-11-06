@@ -99,15 +99,19 @@ func TestFindClonesSkipsUnreadableDirectory(t *testing.T) {
 
 // fakeTmutil answers isexcluded from state and records every addexclusion.
 type fakeTmutil struct {
-	excluded map[string]bool
-	failing  map[string]bool
-	added    []string
+	excluded      map[string]bool
+	failing       map[string]bool
+	statusFailing map[string]bool
+	added         []string
 }
 
 func (f *fakeTmutil) run(args ...string) ([]byte, error) {
 	cmd, path := args[0], args[1]
 	switch cmd {
 	case "isexcluded":
+		if f.statusFailing[path] {
+			return []byte("tmutil: unexpected failure\n"), errors.New("exit status 1")
+		}
 		if f.excluded[path] {
 			return []byte("[Excluded]  " + path + "\n"), nil
 		}
@@ -137,6 +141,33 @@ func TestExcludeClonesAddsOnlyMissingExclusions(t *testing.T) {
 	}
 	if want := []string{"/r/new"}; !slices.Equal(logged, want) {
 		t.Errorf("logged = %v, want %v", logged, want)
+	}
+}
+
+func TestExcludedClonesReportsOnlyExcludedPaths(t *testing.T) {
+	fake := &fakeTmutil{excluded: map[string]bool{"/r/done": true}}
+
+	got, err := excludedClones([]string{"/r/done", "/r/new"}, fake.run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"/r/done"}; !slices.Equal(got, want) {
+		t.Errorf("excludedClones() = %v, want %v", got, want)
+	}
+	if len(fake.added) != 0 {
+		t.Errorf("addexclusion calls = %v, want none", fake.added)
+	}
+}
+
+func TestExcludedClonesKeepsResultsAfterStatusFailure(t *testing.T) {
+	fake := &fakeTmutil{excluded: map[string]bool{"/r/done": true}, statusFailing: map[string]bool{"/r/bad": true}}
+
+	got, err := excludedClones([]string{"/r/bad", "/r/done"}, fake.run)
+	if err == nil || !strings.Contains(err.Error(), "tmutil isexcluded /r/bad") {
+		t.Errorf("error = %v, want isexcluded failure for /r/bad", err)
+	}
+	if want := []string{"/r/done"}; !slices.Equal(got, want) {
+		t.Errorf("excludedClones() = %v, want %v", got, want)
 	}
 }
 
