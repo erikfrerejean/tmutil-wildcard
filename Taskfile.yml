@@ -30,7 +30,7 @@ tasks:
       - rm -f "{{.PLIST}}" "{{.BIN}}"
 
   run:
-    desc: Exclude the clones under ~/WeDevelop once, in the foreground
+    desc: Reconcile exclusions under ~/WeDevelop once, in the foreground
     cmds:
       - go run . exclude "$HOME/WeDevelop"
 
@@ -40,6 +40,6 @@ tasks:
       - go run . list "$HOME/WeDevelop"
 
   excluded:
-    desc: Show which clone folders under ~/WeDevelop Time Machine excludes now
+    desc: Show per folder under ~/WeDevelop whether it is excluded, pending or stale
     cmds:
       - go run . excluded "$HOME/WeDevelop"

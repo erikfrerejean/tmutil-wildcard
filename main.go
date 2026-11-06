@@ -1,5 +1,6 @@
-// Command tmutil-wildcard excludes every git clone below the given roots from
-// Time Machine by calling `tmutil addexclusion` on each clone root.
+// Command tmutil-wildcard keeps Time Machine exclusions in step with the git
+// clones below the given roots: every clone root gets a sticky exclusion, and
+// excluded folders that are no longer clones lose theirs.
 package main
 
 import (
@@ -16,9 +17,10 @@ func main() {
 		fmt.Fprintf(flag.CommandLine.Output(), `usage: %s COMMAND ROOT [ROOT...]
 
 commands:
-  exclude   add a Time Machine exclusion for every clone that lacks one
+  exclude   remove stale exclusions, then exclude every clone that lacks one
   list      print every clone root found below the roots
-  excluded  print the clone roots Time Machine currently excludes
+  excluded  print each clone as excluded or pending, and each excluded
+            folder that is no longer a clone as stale
 `, os.Args[0])
 		flag.PrintDefaults()
 	}
@@ -36,12 +38,12 @@ commands:
 
 	var failures []error
 	for _, root := range flag.Args()[1:] {
-		clones, err := findClones(root, log.Printf)
+		s, err := scanRoot(root, log.Printf)
 		if err != nil {
 			failures = append(failures, err)
 			continue
 		}
-		if err := action(clones); err != nil {
+		if err := action(s); err != nil {
 			failures = append(failures, err)
 		}
 	}
@@ -51,25 +53,26 @@ commands:
 	}
 }
 
-var commands = map[string]func(clones []string) error{
-	"exclude": func(clones []string) error {
-		return excludeClones(clones, runTmutil, log.Printf)
+var commands = map[string]func(s scan) error{
+	"exclude": func(s scan) error {
+		return errors.Join(
+			removeStale(s.stale, runTmutil, log.Printf),
+			excludeClones(s.clones, runTmutil, log.Printf),
+		)
 	},
-	"list": func(clones []string) error {
-		printLines(clones)
+	"list": func(s scan) error {
+		for _, clone := range s.clones {
+			fmt.Println(clone)
+		}
 		return nil
 	},
-	"excluded": func(clones []string) error {
-		excluded, err := excludedClones(clones, runTmutil)
-		printLines(excluded)
+	"excluded": func(s scan) error {
+		result, err := statuses(s, runTmutil)
+		for _, st := range result {
+			fmt.Printf("%-9s %s\n", st.state, st.path)
+		}
 		return err
 	},
-}
-
-func printLines(paths []string) {
-	for _, path := range paths {
-		fmt.Println(path)
-	}
 }
 
 func runTmutil(args ...string) ([]byte, error) {

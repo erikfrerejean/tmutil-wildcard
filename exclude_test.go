@@ -2,11 +2,14 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func discardLog(string, ...any) {}
@@ -26,50 +29,85 @@ func writeFile(t *testing.T, path string) {
 	}
 }
 
-func TestFindClones(t *testing.T) {
+// markExcluded sets the xattr tmutil would set, without calling tmutil.
+func markExcluded(t *testing.T, path string) {
+	t.Helper()
+	mkdirAll(t, path)
+	if err := unix.Setxattr(path, excludeAttr, []byte("com.apple.backupd"), 0); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestScanRootClassifiesDirectories(t *testing.T) {
 	root := t.TempDir()
 	mkdirAll(t, filepath.Join(root, "Customers", "acme", "app", ".git"))
 	writeFile(t, filepath.Join(root, "Projects", "worktree", ".git"))
 	mkdirAll(t, filepath.Join(root, "Projects", "worktree", "vendor", "nested", ".git"))
 	mkdirAll(t, filepath.Join(root, "Projects", "plain-folder", "src"))
 	writeFile(t, filepath.Join(root, "notes.md"))
+	markExcluded(t, filepath.Join(root, "Customers", "acme", "app"))
+	markExcluded(t, filepath.Join(root, "Customers", "gone", "ex-clone"))
+	markExcluded(t, filepath.Join(root, "DevOps", "ex-monorepo"))
+	mkdirAll(t, filepath.Join(root, "DevOps", "ex-monorepo", "service", ".git"))
 
-	got, err := findClones(root, discardLog)
+	got, err := scanRoot(root, discardLog)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	want := []string{
+	wantClones := []string{
 		filepath.Join(root, "Customers", "acme", "app"),
+		filepath.Join(root, "DevOps", "ex-monorepo", "service"),
 		filepath.Join(root, "Projects", "worktree"),
 	}
-	if !slices.Equal(got, want) {
-		t.Errorf("findClones() = %v, want %v", got, want)
+	if !slices.Equal(got.clones, wantClones) {
+		t.Errorf("clones = %v, want %v", got.clones, wantClones)
+	}
+	wantStale := []string{
+		filepath.Join(root, "Customers", "gone", "ex-clone"),
+		filepath.Join(root, "DevOps", "ex-monorepo"),
+	}
+	if !slices.Equal(got.stale, wantStale) {
+		t.Errorf("stale = %v, want %v", got.stale, wantStale)
 	}
 }
 
-func TestFindClonesTreatsRootItselfAsClone(t *testing.T) {
+func TestScanRootTreatsRootItselfAsClone(t *testing.T) {
 	root := t.TempDir()
 	mkdirAll(t, filepath.Join(root, ".git"))
 	mkdirAll(t, filepath.Join(root, "sub", ".git"))
 
-	got, err := findClones(root, discardLog)
+	got, err := scanRoot(root, discardLog)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{root}; !slices.Equal(got, want) {
-		t.Errorf("findClones() = %v, want %v", got, want)
+	if want := []string{root}; !slices.Equal(got.clones, want) {
+		t.Errorf("clones = %v, want %v", got.clones, want)
 	}
 }
 
-func TestFindClonesFailsWhenRootIsMissing(t *testing.T) {
-	_, err := findClones(filepath.Join(t.TempDir(), "missing"), discardLog)
+func TestScanRootNeverReportsRootAsStale(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "root")
+	markExcluded(t, root)
+	mkdirAll(t, filepath.Join(root, "plain"))
+
+	got, err := scanRoot(root, discardLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.stale) != 0 {
+		t.Errorf("stale = %v, want none", got.stale)
+	}
+}
+
+func TestScanRootFailsWhenRootIsMissing(t *testing.T) {
+	_, err := scanRoot(filepath.Join(t.TempDir(), "missing"), discardLog)
 	if !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("findClones() error = %v, want ErrNotExist", err)
+		t.Errorf("scanRoot() error = %v, want ErrNotExist", err)
 	}
 }
 
-func TestFindClonesSkipsUnreadableDirectory(t *testing.T) {
+func TestScanRootSkipsUnreadableDirectory(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("root ignores directory permissions")
 	}
@@ -83,26 +121,33 @@ func TestFindClonesSkipsUnreadableDirectory(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
 
 	var logged []string
-	got, err := findClones(root, func(format string, args ...any) {
-		logged = append(logged, format)
+	got, err := scanRoot(root, func(format string, args ...any) {
+		logged = append(logged, fmt.Sprintf(format, args...))
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{filepath.Join(root, "open")}; !slices.Equal(got, want) {
-		t.Errorf("findClones() = %v, want %v", got, want)
+	if want := []string{filepath.Join(root, "open")}; !slices.Equal(got.clones, want) {
+		t.Errorf("clones = %v, want %v", got.clones, want)
 	}
-	if len(logged) != 1 || !strings.HasPrefix(logged[0], "skipping") {
-		t.Errorf("logged = %v, want one skipping line", logged)
+	// The xattr read and the directory listing fail separately.
+	if len(logged) != 2 {
+		t.Fatalf("logged = %v, want two skipping lines", logged)
+	}
+	for _, line := range logged {
+		if !strings.HasPrefix(line, "skipping "+locked) {
+			t.Errorf("logged %q, want it to skip %s", line, locked)
+		}
 	}
 }
 
-// fakeTmutil answers isexcluded from state and records every addexclusion.
+// fakeTmutil answers isexcluded from state and records every change.
 type fakeTmutil struct {
 	excluded      map[string]bool
 	failing       map[string]bool
 	statusFailing map[string]bool
 	added         []string
+	removed       []string
 }
 
 func (f *fakeTmutil) run(args ...string) ([]byte, error) {
@@ -116,23 +161,31 @@ func (f *fakeTmutil) run(args ...string) ([]byte, error) {
 			return []byte("[Excluded]  " + path + "\n"), nil
 		}
 		return []byte("[Included]  " + path + "\n"), nil
-	case "addexclusion":
+	case "addexclusion", "removeexclusion":
 		if f.failing[path] {
 			return []byte(path + ": Error (100002) while attempting to change exclusion setting.\n"), errors.New("exit status 162")
 		}
-		f.added = append(f.added, path)
+		if cmd == "addexclusion" {
+			f.added = append(f.added, path)
+		} else {
+			f.removed = append(f.removed, path)
+		}
 		return nil, nil
 	}
 	return nil, errors.New("unexpected tmutil verb " + cmd)
+}
+
+func collectLog(logged *[]string) logger {
+	return func(format string, args ...any) {
+		*logged = append(*logged, args[0].(string))
+	}
 }
 
 func TestExcludeClonesAddsOnlyMissingExclusions(t *testing.T) {
 	fake := &fakeTmutil{excluded: map[string]bool{"/r/done": true}}
 
 	var logged []string
-	err := excludeClones([]string{"/r/done", "/r/new"}, fake.run, func(format string, args ...any) {
-		logged = append(logged, args[0].(string))
-	})
+	err := excludeClones([]string{"/r/done", "/r/new"}, fake.run, collectLog(&logged))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,33 +194,6 @@ func TestExcludeClonesAddsOnlyMissingExclusions(t *testing.T) {
 	}
 	if want := []string{"/r/new"}; !slices.Equal(logged, want) {
 		t.Errorf("logged = %v, want %v", logged, want)
-	}
-}
-
-func TestExcludedClonesReportsOnlyExcludedPaths(t *testing.T) {
-	fake := &fakeTmutil{excluded: map[string]bool{"/r/done": true}}
-
-	got, err := excludedClones([]string{"/r/done", "/r/new"}, fake.run)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := []string{"/r/done"}; !slices.Equal(got, want) {
-		t.Errorf("excludedClones() = %v, want %v", got, want)
-	}
-	if len(fake.added) != 0 {
-		t.Errorf("addexclusion calls = %v, want none", fake.added)
-	}
-}
-
-func TestExcludedClonesKeepsResultsAfterStatusFailure(t *testing.T) {
-	fake := &fakeTmutil{excluded: map[string]bool{"/r/done": true}, statusFailing: map[string]bool{"/r/bad": true}}
-
-	got, err := excludedClones([]string{"/r/bad", "/r/done"}, fake.run)
-	if err == nil || !strings.Contains(err.Error(), "tmutil isexcluded /r/bad") {
-		t.Errorf("error = %v, want isexcluded failure for /r/bad", err)
-	}
-	if want := []string{"/r/done"}; !slices.Equal(got, want) {
-		t.Errorf("excludedClones() = %v, want %v", got, want)
 	}
 }
 
@@ -180,5 +206,49 @@ func TestExcludeClonesContinuesAfterFailure(t *testing.T) {
 	}
 	if want := []string{"/r/good"}; !slices.Equal(fake.added, want) {
 		t.Errorf("addexclusion calls = %v, want %v", fake.added, want)
+	}
+}
+
+func TestRemoveStaleContinuesAfterFailure(t *testing.T) {
+	fake := &fakeTmutil{failing: map[string]bool{"/r/bad": true}}
+
+	var logged []string
+	err := removeStale([]string{"/r/bad", "/r/old"}, fake.run, collectLog(&logged))
+	if err == nil || !strings.Contains(err.Error(), "tmutil removeexclusion /r/bad") {
+		t.Errorf("error = %v, want removeexclusion failure for /r/bad", err)
+	}
+	if want := []string{"/r/old"}; !slices.Equal(fake.removed, want) {
+		t.Errorf("removeexclusion calls = %v, want %v", fake.removed, want)
+	}
+	if want := []string{"/r/old"}; !slices.Equal(logged, want) {
+		t.Errorf("logged = %v, want %v", logged, want)
+	}
+}
+
+func TestStatusesReportsExcludedPendingAndStale(t *testing.T) {
+	fake := &fakeTmutil{excluded: map[string]bool{"/r/done": true}}
+
+	got, err := statuses(scan{clones: []string{"/r/done", "/r/new"}, stale: []string{"/r/old"}}, fake.run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []status{{"excluded", "/r/done"}, {"pending", "/r/new"}, {"stale", "/r/old"}}
+	if !slices.Equal(got, want) {
+		t.Errorf("statuses() = %v, want %v", got, want)
+	}
+	if len(fake.added)+len(fake.removed) != 0 {
+		t.Errorf("statuses() changed exclusions: added %v, removed %v", fake.added, fake.removed)
+	}
+}
+
+func TestStatusesKeepsResultsAfterStatusFailure(t *testing.T) {
+	fake := &fakeTmutil{excluded: map[string]bool{"/r/done": true}, statusFailing: map[string]bool{"/r/bad": true}}
+
+	got, err := statuses(scan{clones: []string{"/r/bad", "/r/done"}}, fake.run)
+	if err == nil || !strings.Contains(err.Error(), "tmutil isexcluded /r/bad") {
+		t.Errorf("error = %v, want isexcluded failure for /r/bad", err)
+	}
+	if want := []status{{"excluded", "/r/done"}}; !slices.Equal(got, want) {
+		t.Errorf("statuses() = %v, want %v", got, want)
 	}
 }
